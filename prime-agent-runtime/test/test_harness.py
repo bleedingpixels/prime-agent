@@ -170,6 +170,22 @@ class HarnessStateTest(unittest.TestCase):
                 state.save()
             self.assertEqual(outside.read_text(encoding="utf-8"), "sentinel")
 
+    @unittest.skipIf(os.name == "nt", "POSIX permissions and symlink semantics")
+    def test_symlinked_harness_load_blocks_later_save(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "harness"
+            root.mkdir(mode=0o700)
+            state_path = root / "harness_state.json"
+            outside = Path(temp_dir) / "outside.json"
+            outside.write_text('{"sentinel": true}', encoding="utf-8")
+            state_path.symlink_to(outside)
+
+            state = HarnessState(state_path, scope="global")
+            self.assertEqual(state.list(), [])
+            with self.assertRaisesRegex(RuntimeError, "non-regular private file"):
+                state.save()
+            self.assertEqual(outside.read_text(encoding="utf-8"), '{"sentinel": true}')
+
     def test_load_ignores_unknown_json_keys(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             state_path = Path(temp_dir) / "harness_state.json"

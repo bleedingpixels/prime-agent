@@ -1,5 +1,5 @@
 import { existsSync, lstatSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai";
@@ -59,6 +59,8 @@ export interface HarnessRefinementEvent {
 
 export interface HarnessState {
 	schema: number;
+	/** Unsafe on-disk state is readable only; mutations must fail closed. */
+	persistentWriteError?: string;
 	entries: Record<RefinementKind, Record<string, HarnessEntry>>;
 	refinements: HarnessRefinementEvent[];
 }
@@ -279,17 +281,51 @@ export function getHarnessStatePath(harnessStateDir: string = getGlobalHarnessSt
 	return join(harnessStateDir, "harness_state.json");
 }
 
+function unsafeHarnessDirectoryError(path: string): string {
+	return `Refusing to use non-directory private path: ${path}`;
+}
+
+function validateHarnessDirectory(path: string): string | undefined {
+	let current = resolve(path);
+	while (true) {
+		try {
+			const info = lstatSync(current);
+			if (info.isSymbolicLink() || !info.isDirectory()) return unsafeHarnessDirectoryError(current);
+			// The closest existing component is the caller-controlled persistence
+			// root; checking beyond it would reject OS-managed aliases such as /var.
+			return undefined;
+		} catch (error) {
+			if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
+				return unsafeHarnessDirectoryError(current);
+		}
+		const parent = dirname(current);
+		if (parent === current) return undefined;
+		current = parent;
+	}
+}
+
 export function loadHarnessState(
 	harnessStateDir: string = getGlobalHarnessStateDir(),
 	scope: HarnessScope = "global",
 ): HarnessState {
 	if (!isPersistentHarnessStorageSupported()) return emptyHarnessState();
-	const statePath = getHarnessStatePath(harnessStateDir);
-	if (!existsSync(statePath)) {
-		return emptyHarnessState();
+	const directoryError = validateHarnessDirectory(harnessStateDir);
+	if (directoryError) {
+		const state = emptyHarnessState();
+		state.persistentWriteError = directoryError;
+		return state;
 	}
-	if (lstatSync(statePath).isSymbolicLink()) {
-		throw new Error(`Refusing to use non-regular private file: ${statePath}`);
+	const statePath = getHarnessStatePath(harnessStateDir);
+	try {
+		const info = lstatSync(statePath);
+		if (info.isSymbolicLink() || !info.isFile()) {
+			const state = emptyHarnessState();
+			state.persistentWriteError = `Refusing to use non-regular private file: ${statePath}`;
+			return state;
+		}
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") return emptyHarnessState();
+		throw error;
 	}
 	let parsed: Partial<HarnessState>;
 	try {
@@ -328,6 +364,10 @@ export function loadHarnessState(
 	return state;
 }
 
+export function assertHarnessStateWritable(state: HarnessState): void {
+	if (state.persistentWriteError) throw new Error(state.persistentWriteError);
+}
+
 export function mergeHarnessStates(globalState: HarnessState, localState?: HarnessState): HarnessState {
 	const merged = emptyHarnessState();
 	merged.schema = Math.max(globalState.schema, localState?.schema ?? 1);
@@ -349,6 +389,7 @@ export function mergeHarnessStates(globalState: HarnessState, localState?: Harne
 
 export function saveHarnessState(harnessStateDir: string, state: HarnessState): string {
 	assertPersistentHarnessStorageSupported();
+	assertHarnessStateWritable(state);
 	const statePath = getHarnessStatePath(harnessStateDir);
 	writePrivateFileAtomic(statePath, `${JSON.stringify(state, null, 2)}\n`);
 	return statePath;
@@ -375,13 +416,19 @@ export function appendGlobalRefinement(harnessStateDir: string, result: Refineme
 }
 
 export function loadGlobalRefinementHistory(harnessStateDir: string = getGlobalHarnessStateDir()): RefinementResult[] {
-	if (!isPersistentHarnessStorageSupported()) return [];
+	if (!isPersistentHarnessStorageSupported() || validateHarnessDirectory(harnessStateDir)) return [];
 	const historyPath = getRefinementHistoryPath(harnessStateDir);
 	if (!existsSync(historyPath)) {
 		return [];
 	}
 	const results: RefinementResult[] = [];
-	for (const line of readPrivateFile(historyPath, "utf8").split("\n")) {
+	let content: string;
+	try {
+		content = readPrivateFile(historyPath, "utf8");
+	} catch {
+		return results;
+	}
+	for (const line of content.split("\n")) {
 		const trimmed = line.trim();
 		if (!trimmed) continue;
 		try {

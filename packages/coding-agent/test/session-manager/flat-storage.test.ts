@@ -1,4 +1,14 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	rmSync,
+	statSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -50,6 +60,39 @@ describe("SessionManager flat storage", () => {
 			rmSync(tempDir, { recursive: true, force: true });
 		}
 	});
+
+	it.runIf(process.platform !== "win32")("rejects a symlinked artifact root without traversing it", () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "session-artifact-root-"));
+		try {
+			const session = SessionManager.create(tempDir, join(tempDir, "sessions"));
+			const root = join(tempDir, "session-artifacts");
+			const outside = join(tempDir, "outside");
+			mkdirSync(outside);
+			symlinkSync(outside, root);
+			expect(() => session.getSessionArtifactDir({ create: false })).toThrow("non-directory private path");
+			expect(existsSync(join(outside, session.getSessionId()))).toBe(false);
+		} finally {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it.runIf(process.platform !== "win32")(
+		"does not traverse or repair a permissive artifact directory during read-only lookup",
+		() => {
+			const tempDir = mkdtempSync(join(tmpdir(), "session-artifact-private-"));
+			try {
+				const session = SessionManager.create(tempDir, join(tempDir, "sessions"));
+				const artifactPath = session.getSessionArtifactDir()!;
+				chmodSync(artifactPath, 0o755);
+				expect(() => session.getSessionArtifactDir({ create: false })).toThrow(
+					"non-private session artifact directory",
+				);
+				expect(statSync(artifactPath).mode & 0o777).toBe(0o755);
+			} finally {
+				rmSync(tempDir, { recursive: true, force: true });
+			}
+		},
+	);
 
 	it("lists sessions without loading large message bodies into search text", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "session-large-list-"));

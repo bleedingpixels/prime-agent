@@ -196,6 +196,7 @@ import {
 	type AutoRefineReview,
 	appendGlobalRefinement,
 	applyRefinementProposal,
+	assertHarnessStateWritable,
 	getGlobalHarnessStateDir,
 	getLocalHarnessStateDir,
 	getRefinementHistory,
@@ -7272,9 +7273,14 @@ export class AgentSession {
 	}
 
 	private _autoRefineAllowedForSession(): boolean {
-		return (
-			isPersistentHarnessStorageSupported() && this._rlmDepth === 0 && this._localHarnessStateDir() !== undefined
-		);
+		if (!isPersistentHarnessStorageSupported() || this._rlmDepth !== 0 || this._localHarnessStateDir() === undefined)
+			return false;
+		try {
+			assertHarnessStateWritable(loadHarnessState(this._localHarnessStateDir()!, "local"));
+			return true;
+		} catch {
+			return false;
+		}
 	}
 
 	private _cancelPostCompactionContinue(): void {
@@ -7683,6 +7689,8 @@ export class AgentSession {
 		if (!isPersistentHarnessStorageSupported()) {
 			throw new Error(WINDOWS_HARNESS_PERSISTENCE_UNSUPPORTED_ERROR);
 		}
+		const preflightDir = options.global ? getGlobalHarnessStateDir() : this._localHarnessStateDir();
+		if (preflightDir) assertHarnessStateWritable(loadHarnessState(preflightDir, options.global ? "global" : "local"));
 		// Queued /refine executes from the session-input pump between turns;
 		// refine never aborts the agent (planning is backgrounded and the apply
 		// phase waits for quiescence), so skipAbort only asserts the pump's

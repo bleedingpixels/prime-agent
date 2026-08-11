@@ -2,6 +2,7 @@ import {
 	appendFileSync,
 	chmodSync,
 	existsSync,
+	type fchownSync,
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
@@ -18,12 +19,14 @@ import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 type ChmodSync = typeof chmodSync;
+type FchownSync = typeof fchownSync;
 type RenameSync = typeof renameSync;
 type WriteFileSync = typeof writeFileSync;
 
 const fsMocks = vi.hoisted(() => ({
 	actualWriteFileSync: undefined as WriteFileSync | undefined,
 	chmodSync: vi.fn<ChmodSync>(),
+	fchownSync: vi.fn<FchownSync>(),
 	renameSync: vi.fn<RenameSync>(),
 	writeFileSync: vi.fn<WriteFileSync>(),
 }));
@@ -31,11 +34,13 @@ vi.mock("node:fs", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs")>();
 	fsMocks.actualWriteFileSync = actual.writeFileSync;
 	fsMocks.chmodSync.mockImplementation(actual.chmodSync);
+	fsMocks.fchownSync.mockImplementation(actual.fchownSync);
 	fsMocks.renameSync.mockImplementation(actual.renameSync);
 	fsMocks.writeFileSync.mockImplementation(actual.writeFileSync);
 	return {
 		...actual,
 		chmodSync: fsMocks.chmodSync,
+		fchownSync: fsMocks.fchownSync,
 		renameSync: fsMocks.renameSync,
 		writeFileSync: fsMocks.writeFileSync,
 	};
@@ -117,12 +122,16 @@ describe("SessionManager.flushNow", () => {
 		mgr.flushNow();
 		const file = mgr.getSessionFile()!;
 		chmodSync(file, 0o660);
+		const before = statSync(file);
+		fsMocks.fchownSync.mockClear();
 		fsMocks.renameSync.mockClear();
 
 		mgr.appendMessage({ role: "user", content: "pending", timestamp: Date.now() });
 		mgr.flushNow();
 
 		expect(fsMocks.renameSync).toHaveBeenCalledWith(expect.any(String), file);
+		if (process.platform !== "win32")
+			expect(fsMocks.fchownSync).toHaveBeenCalledWith(expect.any(Number), before.uid, before.gid);
 		expect(statSync(file).mode & 0o777).toBe(0o600);
 	});
 

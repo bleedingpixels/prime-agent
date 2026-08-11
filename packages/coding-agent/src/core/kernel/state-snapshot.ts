@@ -58,7 +58,7 @@ export function buildSnapshotCode(outPath: string, manifestPath: string, maxByte
 	// working even when the user namespace shadows names like list/open/print/len.
 	return `
 def _prime_agent_snapshot_state():
-    import builtins as _b, json, os, sys, datetime
+    import builtins as _b, json, os, stat, sys, datetime
     try:
         import dill
     except _b.Exception as _err:
@@ -100,11 +100,13 @@ def _prime_agent_snapshot_state():
         total += _b.len(blob)
 
     out_dir = os.path.dirname(${pyStr(outPath)})
-    os.makedirs(out_dir, mode=0o700, exist_ok=True)
-    try:
-        os.chmod(out_dir, 0o700)
-    except _b.Exception:
-        pass
+    if os.path.lexists(out_dir):
+        out_dir_info = os.lstat(out_dir)
+        if stat.S_ISLNK(out_dir_info.st_mode) or not stat.S_ISDIR(out_dir_info.st_mode):
+            _b.print(${pyStr(RESULT_MARKER)} + json.dumps({"error": "unsafe snapshot directory"}))
+            return
+    else:
+        os.makedirs(out_dir, mode=0o700, exist_ok=False)
     tmp = ${pyStr(outPath)} + ".tmp." + _b.str(os.getpid()) + "." + os.urandom(8).hex()
     try:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _b.getattr(os, "O_NOFOLLOW", 0)
@@ -113,8 +115,13 @@ def _prime_agent_snapshot_state():
             dill.dump(payload, fh)
             fh.flush()
             os.fsync(fh.fileno())
+            if hasattr(os, "fchmod"):
+                os.fchmod(fh.fileno(), 0o600)
+        if os.path.lexists(${pyStr(outPath)}):
+            out_info = os.lstat(${pyStr(outPath)})
+            if stat.S_ISLNK(out_info.st_mode) or not stat.S_ISREG(out_info.st_mode):
+                raise OSError("unsafe snapshot destination")
         os.replace(tmp, ${pyStr(outPath)})
-        os.chmod(${pyStr(outPath)}, 0o600)
     except _b.Exception as _err:
         try:
             os.remove(tmp)
@@ -133,6 +140,7 @@ def _prime_agent_snapshot_state():
         "pythonVersion": sys.version.split()[0],
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
+    manifest_tmp = None
     try:
         manifest_tmp = ${pyStr(manifestPath)} + ".tmp." + _b.str(os.getpid()) + "." + os.urandom(8).hex()
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _b.getattr(os, "O_NOFOLLOW", 0)
@@ -141,11 +149,17 @@ def _prime_agent_snapshot_state():
             json.dump(manifest, fh)
             fh.flush()
             os.fsync(fh.fileno())
+            if hasattr(os, "fchmod"):
+                os.fchmod(fh.fileno(), 0o600)
+        if os.path.lexists(${pyStr(manifestPath)}):
+            manifest_info = os.lstat(${pyStr(manifestPath)})
+            if stat.S_ISLNK(manifest_info.st_mode) or not stat.S_ISREG(manifest_info.st_mode):
+                raise OSError("unsafe snapshot manifest")
         os.replace(manifest_tmp, ${pyStr(manifestPath)})
-        os.chmod(${pyStr(manifestPath)}, 0o600)
     except _b.Exception:
         try:
-            os.remove(manifest_tmp)
+            if manifest_tmp is not None:
+                os.remove(manifest_tmp)
         except _b.Exception:
             pass
     _b.print(${pyStr(RESULT_MARKER)} + json.dumps({"saved": saved, "skipped": skipped, "bytes": bytes_written}))

@@ -282,7 +282,11 @@ class HarnessState:
             return self
         info = self.file_path.lstat()
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-            raise OSError(f"Refusing to use non-regular private file: {self.file_path}")
+            # Keep prompt construction/read APIs available, but permanently block
+            # mutation of this unsafe persistent sink.
+            self._local_write_error = f"Refusing to use non-regular private file: {self.file_path}"
+            self._loaded_mtime = None
+            return self
         mtime = self._disk_mtime()
         try:
             with _open_private_for_read(self.file_path) as f:

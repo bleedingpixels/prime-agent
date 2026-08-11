@@ -28,16 +28,24 @@ describe("issue #1105 session storage security", () => {
 		rmSync(tempRoot, { recursive: true, force: true });
 	});
 
-	it.each(["../escape", "../../escape", "nested/id", "nested\\id", ".", "..", "x".repeat(129)])(
-		"rejects unsafe explicit session id %j",
-		(sessionId) => {
-			const sessionDir = join(tempRoot, "sessions");
-			const manager = SessionManager.create(tempRoot, sessionDir);
+	it.each([
+		"../escape",
+		"../../escape",
+		"nested/id",
+		"nested\\id",
+		".",
+		"..",
+		"x".repeat(129),
+		"safe\n",
+		"safe\r",
+		"safe\u2028",
+	])("rejects unsafe explicit session id %j", (sessionId) => {
+		const sessionDir = join(tempRoot, "sessions");
+		const manager = SessionManager.create(tempRoot, sessionDir);
 
-			expect(() => manager.newSession({ id: sessionId })).toThrow("Invalid session id");
-			expect(() => manager.getSessionArtifactDir()).not.toThrow();
-		},
-	);
+		expect(() => manager.newSession({ id: sessionId })).toThrow("Invalid session id");
+		expect(() => manager.getSessionArtifactDir()).not.toThrow();
+	});
 
 	it("rejects a traversal id from a persisted session header", () => {
 		const sessionDir = join(tempRoot, "sessions");
