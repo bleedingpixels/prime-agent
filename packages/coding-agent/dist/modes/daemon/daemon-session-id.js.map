@@ -1,0 +1,1 @@
+{"version":3,"file":"daemon-session-id.js","sourceRoot":"","sources":["../../../src/modes/daemon/daemon-session-id.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,sBAAsB,EAAE,sBAAsB,EAAE,MAAM,0BAA0B,CAAC","sourcesContent":["export { formatSessionDisplayId, matchesSessionIdSuffix } from \"../../core/session-id.js\";\n"]}

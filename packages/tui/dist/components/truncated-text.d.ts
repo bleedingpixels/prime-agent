@@ -1,0 +1,14 @@
+import type { Component } from "../tui.js";
+/**
+ * Text component that truncates to fit viewport width
+ */
+export declare class TruncatedText implements Component {
+    private text;
+    private paddingX;
+    private paddingY;
+    constructor(text: string, paddingX?: number, paddingY?: number);
+    setText(text: string): void;
+    invalidate(): void;
+    render(width: number): string[];
+}
+//# sourceMappingURL=truncated-text.d.ts.map

@@ -1,0 +1,41 @@
+export function buildBaseOptions(model, options, apiKey) {
+    return {
+        temperature: options?.temperature,
+        maxTokens: options?.maxTokens ?? (model.maxTokens > 0 ? Math.min(model.maxTokens, 32000) : undefined),
+        signal: options?.signal,
+        apiKey: apiKey || options?.apiKey,
+        transport: options?.transport,
+        serviceTier: options?.serviceTier,
+        cacheRetention: options?.cacheRetention,
+        sessionId: options?.sessionId,
+        headers: options?.headers,
+        onPayload: options?.onPayload,
+        onResponse: options?.onResponse,
+        timeoutMs: options?.timeoutMs,
+        maxRetries: options?.maxRetries,
+        maxRetryDelayMs: options?.maxRetryDelayMs,
+        metadata: options?.metadata,
+    };
+}
+export function clampReasoning(effort) {
+    // Token-budget providers have no distinct xhigh/max budget tier; clamp both to high.
+    return effort === "xhigh" || effort === "max" ? "high" : effort;
+}
+export function adjustMaxTokensForThinking(baseMaxTokens, modelMaxTokens, reasoningLevel, customBudgets) {
+    const defaultBudgets = {
+        minimal: 1024,
+        low: 2048,
+        medium: 8192,
+        high: 16384,
+    };
+    const budgets = { ...defaultBudgets, ...customBudgets };
+    const minOutputTokens = 1024;
+    const level = clampReasoning(reasoningLevel);
+    let thinkingBudget = budgets[level];
+    const maxTokens = Math.min(baseMaxTokens + thinkingBudget, modelMaxTokens);
+    if (maxTokens <= thinkingBudget) {
+        thinkingBudget = Math.max(0, maxTokens - minOutputTokens);
+    }
+    return { maxTokens, thinkingBudget };
+}
+//# sourceMappingURL=simple-options.js.map

@@ -1,0 +1,236 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import hostedGitInfo from "hosted-git-info";
+function splitRef(url) {
+    const scpLikeMatch = url.match(/^git@([^:]+):(.+)$/);
+    if (scpLikeMatch) {
+        const pathWithMaybeRef = scpLikeMatch[2] ?? "";
+        const refSeparator = pathWithMaybeRef.indexOf("@");
+        if (refSeparator < 0)
+            return { repo: url };
+        const repoPath = pathWithMaybeRef.slice(0, refSeparator);
+        const ref = pathWithMaybeRef.slice(refSeparator + 1);
+        if (!repoPath || !ref)
+            return { repo: url };
+        return {
+            repo: `git@${scpLikeMatch[1] ?? ""}:${repoPath}`,
+            ref,
+        };
+    }
+    if (url.includes("://")) {
+        try {
+            const parsed = new URL(url);
+            const pathWithMaybeRef = parsed.pathname.replace(/^\/+/, "");
+            const refSeparator = pathWithMaybeRef.indexOf("@");
+            if (refSeparator < 0)
+                return { repo: url };
+            const repoPath = pathWithMaybeRef.slice(0, refSeparator);
+            const ref = pathWithMaybeRef.slice(refSeparator + 1);
+            if (!repoPath || !ref)
+                return { repo: url };
+            parsed.pathname = `/${repoPath}`;
+            return {
+                repo: parsed.toString().replace(/\/$/, ""),
+                ref,
+            };
+        }
+        catch {
+            return { repo: url };
+        }
+    }
+    const slashIndex = url.indexOf("/");
+    if (slashIndex < 0) {
+        return { repo: url };
+    }
+    const host = url.slice(0, slashIndex);
+    const pathWithMaybeRef = url.slice(slashIndex + 1);
+    const refSeparator = pathWithMaybeRef.indexOf("@");
+    if (refSeparator < 0) {
+        return { repo: url };
+    }
+    const repoPath = pathWithMaybeRef.slice(0, refSeparator);
+    const ref = pathWithMaybeRef.slice(refSeparator + 1);
+    if (!repoPath || !ref) {
+        return { repo: url };
+    }
+    return {
+        repo: `${host}/${repoPath}`,
+        ref,
+    };
+}
+function parseGenericGitUrl(url) {
+    const { repo: repoWithoutRef, ref } = splitRef(url);
+    let repo = repoWithoutRef;
+    let host = "";
+    let path = "";
+    const scpLikeMatch = repoWithoutRef.match(/^git@([^:]+):(.+)$/);
+    if (scpLikeMatch) {
+        host = scpLikeMatch[1] ?? "";
+        path = scpLikeMatch[2] ?? "";
+    }
+    else if (repoWithoutRef.startsWith("https://") ||
+        repoWithoutRef.startsWith("http://") ||
+        repoWithoutRef.startsWith("ssh://") ||
+        repoWithoutRef.startsWith("git://")) {
+        try {
+            const parsed = new URL(repoWithoutRef);
+            host = parsed.hostname;
+            path = parsed.pathname.replace(/^\/+/, "");
+        }
+        catch {
+            return null;
+        }
+    }
+    else {
+        const slashIndex = repoWithoutRef.indexOf("/");
+        if (slashIndex < 0) {
+            return null;
+        }
+        host = repoWithoutRef.slice(0, slashIndex);
+        path = repoWithoutRef.slice(slashIndex + 1);
+        if (!host.includes(".") && host !== "localhost") {
+            return null;
+        }
+        repo = `https://${repoWithoutRef}`;
+    }
+    const normalizedPath = path.replace(/\.git$/, "").replace(/^\/+/, "");
+    if (!host || !normalizedPath || normalizedPath.split("/").length < 2) {
+        return null;
+    }
+    return {
+        type: "git",
+        repo,
+        host,
+        path: normalizedPath,
+        ref,
+        pinned: Boolean(ref),
+    };
+}
+/**
+ * Parse git source into a GitSource.
+ *
+ * Rules:
+ * - With git: prefix, accept all historical shorthand forms.
+ * - Without git: prefix, only accept explicit protocol URLs.
+ */
+export function parseGitUrl(source) {
+    const trimmed = source.trim();
+    const hasGitPrefix = trimmed.startsWith("git:");
+    const url = hasGitPrefix ? trimmed.slice(4).trim() : trimmed;
+    if (!hasGitPrefix && !/^(https?|ssh|git):\/\//i.test(url)) {
+        return null;
+    }
+    const split = splitRef(url);
+    const hostedCandidates = [split.ref ? `${split.repo}#${split.ref}` : undefined, url].filter((value) => Boolean(value));
+    for (const candidate of hostedCandidates) {
+        const info = hostedGitInfo.fromUrl(candidate);
+        if (info) {
+            if (split.ref && info.project?.includes("@")) {
+                continue;
+            }
+            const useHttpsPrefix = !split.repo.startsWith("http://") &&
+                !split.repo.startsWith("https://") &&
+                !split.repo.startsWith("ssh://") &&
+                !split.repo.startsWith("git://") &&
+                !split.repo.startsWith("git@");
+            return {
+                type: "git",
+                repo: useHttpsPrefix ? `https://${split.repo}` : split.repo,
+                host: info.domain || "",
+                path: `${info.user}/${info.project}`.replace(/\.git$/, ""),
+                ref: info.committish || split.ref || undefined,
+                pinned: Boolean(info.committish || split.ref),
+            };
+        }
+    }
+    const httpsCandidates = [split.ref ? `https://${split.repo}#${split.ref}` : undefined, `https://${url}`].filter((value) => Boolean(value));
+    for (const candidate of httpsCandidates) {
+        const info = hostedGitInfo.fromUrl(candidate);
+        if (info) {
+            if (split.ref && info.project?.includes("@")) {
+                continue;
+            }
+            return {
+                type: "git",
+                repo: `https://${split.repo}`,
+                host: info.domain || "",
+                path: `${info.user}/${info.project}`.replace(/\.git$/, ""),
+                ref: info.committish || split.ref || undefined,
+                pinned: Boolean(info.committish || split.ref),
+            };
+        }
+    }
+    return parseGenericGitUrl(url);
+}
+/**
+ * Find git metadata paths by walking up from cwd.
+ * Handles both regular git repos (.git is a directory) and worktrees (.git is a file).
+ */
+export function findGitPaths(cwd) {
+    let dir = cwd;
+    while (true) {
+        const gitPath = join(dir, ".git");
+        if (existsSync(gitPath)) {
+            try {
+                const stat = statSync(gitPath);
+                if (stat.isFile()) {
+                    const content = readFileSync(gitPath, "utf8").trim();
+                    if (content.startsWith("gitdir: ")) {
+                        const gitDir = resolve(dir, content.slice(8).trim());
+                        const headPath = join(gitDir, "HEAD");
+                        if (!existsSync(headPath))
+                            return null;
+                        const commonDirPath = join(gitDir, "commondir");
+                        const commonGitDir = existsSync(commonDirPath)
+                            ? resolve(gitDir, readFileSync(commonDirPath, "utf8").trim())
+                            : gitDir;
+                        return { repoDir: dir, commonGitDir, headPath };
+                    }
+                }
+                else if (stat.isDirectory()) {
+                    const headPath = join(gitPath, "HEAD");
+                    if (!existsSync(headPath))
+                        return null;
+                    return { repoDir: dir, commonGitDir: gitPath, headPath };
+                }
+            }
+            catch {
+                return null;
+            }
+        }
+        const parent = dirname(dir);
+        if (parent === dir)
+            return null;
+        dir = parent;
+    }
+}
+export function gitContextsEqual(a, b) {
+    return a.repoUrl === b.repoUrl && a.commit === b.commit && a.branch === b.branch;
+}
+function runGit(cwd, args) {
+    const result = spawnSync("git", ["--no-optional-locks", ...args], {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+    });
+    if (result.status !== 0 || typeof result.stdout !== "string")
+        return null;
+    return result.stdout.trim() || null;
+}
+export function captureGitContext(cwd) {
+    const commit = runGit(cwd, ["rev-parse", "HEAD"]);
+    const branch = runGit(cwd, ["branch", "--show-current"]);
+    const remote = runGit(cwd, ["remote", "get-url", "origin"]);
+    if (!commit && !branch && !remote)
+        return null;
+    const context = {};
+    if (remote)
+        context.repoUrl = parseGitUrl(remote)?.repo ?? remote;
+    if (commit)
+        context.commit = commit;
+    if (branch)
+        context.branch = branch;
+    return context;
+}
+//# sourceMappingURL=git.js.map

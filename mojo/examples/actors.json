@@ -1,0 +1,6 @@
+[
+  {"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"spawn-1","type":"function","function":{"name":"spawn_agent","arguments":"{\"name\":\"helper\",\"prompt\":\"Return a short completion message.\"}"}}]},"finish_reason":"tool_calls"}]},
+  {"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"wait-1","type":"function","function":{"name":"wait_agent","arguments":"{\"agent_id\":1}"}}]},"finish_reason":"tool_calls"}]},
+  {"choices":[{"message":{"role":"assistant","content":"The helper completed its turn."},"finish_reason":"stop"}]},
+  {"choices":[{"message":{"role":"assistant","content":"The parent spawned a BoC actor, waited for its result, and completed."},"finish_reason":"stop"}]}
+]

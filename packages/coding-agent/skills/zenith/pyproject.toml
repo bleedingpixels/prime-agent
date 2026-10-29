@@ -1,0 +1,14 @@
+[project]
+name = "prime-agent-zenith"
+version = "0.1.0"
+description = "Prime-native durable multi-agent mission orchestration"
+requires-python = ">=3.11"
+dependencies = []
+license = { file = "LICENSE" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/zenith"]

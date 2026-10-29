@@ -1,0 +1,13 @@
+--- vendor/boc/core.mojo
++++ vendor/boc/core.mojo
+@@ -284,10 +284,6 @@
+         if self._active:
+             raise Error("scheduler is executing")
+         var completed = 0
+-        if workers == 1:
+-            while self.step():
+-                completed += 1
+-            return completed
+         while len(self._jobs):
+             var earlier = List[Int]()
+             var selected = List[Int]()
